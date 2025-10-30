@@ -7,6 +7,7 @@
 #include "proc.h"
 #include "vm.h"
 
+
 uint64
 sys_exit(void)
 {
@@ -111,4 +112,30 @@ uint64
 sys_ps(void)
 {
   return ps();
+}
+
+//GETPROCINT() HERE !!!!!
+uint64
+sys_getprocinfo(void){
+
+  int pid;
+  argint(0, &pid);
+  extern struct proc proc[NPROC];
+
+  struct proc *p;
+  for (p = proc; p < &proc[NPROC]; p++){
+    if(p->pid ==pid){      
+      printf("PID: %d\n", pid);
+      printf("Total runtime: %d ticks\n", p->runtime_ticks);
+      printf("No of times scheduled: %d times\n", p->scheduled_num);
+      printf("Process created at: %d\n", p->created);
+      printf("Process first scheduled at:%d\n", p->first_scheduled);
+      //printf("Process exited at: %d\n", p->exited);
+      //printf("Turnaround time: %d\n", p->exited - p->created);
+      printf("Reponse time: %d\n", p->first_scheduled-p->created);
+
+      return 0;
+    }
+  }
+  return -1;
 }

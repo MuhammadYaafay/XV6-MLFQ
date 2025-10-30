@@ -11,7 +11,7 @@ struct cpu cpus[NCPU];
 struct proc proc[NPROC];
 
 struct proc *initproc;
-
+extern uint ticks;
 int nextpid = 1;
 struct spinlock pid_lock;
 
@@ -124,7 +124,11 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
-
+  //for getprocinfo
+  p->first_scheduled=0;
+  p->created=ticks;
+  p->runtime_ticks = 0;
+  p->scheduled_num=0;
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -358,6 +362,11 @@ kexit(int status)
   p->xstate = status;
   p->state = ZOMBIE;
 
+//
+  p->exited =ticks;
+  printf("Process exited at: %d\n", p->exited);
+  printf("Turnaround time: %d\n", p->exited - p->created);
+
   release(&wait_lock);
 
   // Jump into the scheduler, never to return.
@@ -434,16 +443,19 @@ scheduler(void)
     // processes are waiting. Then turn them back off
     // to avoid a possible race between an interrupt
     // and wfi.
+    
     intr_on();
-    intr_off();
 
     int found = 0;
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
+
+        p->scheduled_num++;     //times a process has been scheduled
+        if(p->first_scheduled==0){
+          p->first_scheduled=ticks;
+        }
+
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
