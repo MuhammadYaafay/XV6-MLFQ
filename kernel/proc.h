@@ -80,7 +80,7 @@ struct trapframe {
 };
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
-
+enum queued { QUEUED, NOTQUEUED };
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -91,6 +91,12 @@ struct proc {
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
+  int staticpriority;          // Static priority of the process
+  uint scheduletick;           // Stores the tick on which the process was last scheduled
+  uint runningticks;           // Stores the number of ticks it was running since last scheduled
+  uint sleepingticks;          // Stores the number of ticks it was sleeping since last scheduled
+  uint totalrtime;             // Total run time of a process
+  int schedulecount;
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
@@ -98,10 +104,32 @@ struct proc {
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
+  int tracemask;               // Stores the trace mask
+  uint createtime;             // Stores the tick on when it was created
   pagetable_t pagetable;       // User page table
   struct trapframe *trapframe; // data page for trampoline.S
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  enum queued queuestate;
+  int queuelevel;
+  int queueruntime;
+  uint queueentertime;
+  uint q[QCOUNT];
+  // For waitx
+  uint rtime;                   // How long the process ran for
+  uint ctime;                   // When was the process created
+  uint etime;                   // When did the process exited
+
 };
+
+struct PriorityQueue {
+  int front, back;
+  struct proc* queue[QSIZE];
+};
+extern struct PriorityQueue queuetable[QCOUNT];
+void push(struct PriorityQueue* q, struct proc* p);
+struct proc* pop(struct PriorityQueue* q);
+void remove(struct PriorityQueue* q, struct proc* p);
+int empty(struct PriorityQueue q);
