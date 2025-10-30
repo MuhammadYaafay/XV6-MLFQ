@@ -13,7 +13,7 @@ struct proc proc[NPROC];
 struct proc *initproc;
 
 int nextpid = 1;
-struct spinlock pid_lock;
+struct spinlock pid_lock; // to prevent same PID for two processes
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
@@ -24,22 +24,22 @@ extern char trampoline[]; // trampoline.S
 // parents are not lost. helps obey the
 // memory model when using p->parent.
 // must be acquired before any p->lock.
-struct spinlock wait_lock;
+struct spinlock wait_lock;  //prevent race condition checking for dead child
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
 // guard page.
 void
-proc_mapstacks(pagetable_t kpgtbl)
+proc_mapstacks(pagetable_t kpgtbl)  //kernel stack for all processes
 {
   struct proc *p;
   
   for(p = proc; p < &proc[NPROC]; p++) {
-    char *pa = kalloc();
+    char *pa = kalloc(); //one page for process's kstack
     if(pa == 0)
       panic("kalloc");
-    uint64 va = KSTACK((int) (p - proc));
-    kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+    uint64 va = KSTACK((int) (p - proc)); // virtual address for this process's kstack
+    kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W); //map kstack in kernel page table
   }
 }
 
@@ -62,7 +62,7 @@ procinit(void)
 // to prevent race with process being moved
 // to a different CPU.
 int
-cpuid()
+cpuid() //which CPU core is executing this code
 {
   int id = r_tp();
   return id;
@@ -82,11 +82,11 @@ mycpu(void)
 struct proc*
 myproc(void)
 {
-  push_off();
+  push_off(); //disable interupt
   struct cpu *c = mycpu();
-  struct proc *p = c->proc;
-  pop_off();
-  return p;
+  struct proc *p = c->proc; //Get the process that's currently running on this CPU.The CPU struct has a field proc that points to the active process
+  pop_off(); //enable interupt
+  return p; 
 }
 
 int
@@ -126,7 +126,7 @@ found:
   p->state = USED;
 
   // Allocate a trapframe page.
-  if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+  if((p->trapframe = (struct trapframe *)kalloc()) == 0){  //The trapframe stores user registers when the process traps into the kernel (system call, interrupt, exception)
     freeproc(p);
     release(&p->lock);
     return 0;
@@ -142,7 +142,7 @@ found:
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
-  memset(&p->context, 0, sizeof(p->context));
+  memset(&p->context, 0, sizeof(p->context));  //Context saves kernel registers when switching between processes
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
@@ -202,7 +202,8 @@ proc_pagetable(struct proc *p)
     return 0;
   }
 
-  return pagetable;
+  return pagetable; //A trampoline page for switching modes.A trapframe page for saving CPU registers.
+
 }
 
 // Free a process's page table, and free the
