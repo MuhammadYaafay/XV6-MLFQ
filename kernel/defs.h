@@ -55,11 +55,6 @@ int             writei(struct inode*, int, uint64, uint, uint);
 void            itrunc(struct inode*);
 void            ireclaim(int);
 
-// ramdisk.c
-void            ramdiskinit(void);
-void            ramdiskintr(void);
-void            ramdiskrw(struct buf*);
-
 // kalloc.c
 void*           kalloc(void);
 void            kfree(void *);
@@ -107,12 +102,10 @@ void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
-int             changepriority(int new_priority, int pid, int* old_dp);
-void            updatetime();
-int             dynamicpriority(struct proc* p);
-void            queuetableinit();
-int             getpreempted(int level);
-int             waitx(uint64, uint*, uint*);
+//added
+void            mlfq_tick(void);
+void            yield_timeslice(void);
+int             getprocinfo(int pid);
 
 // swtch.S
 void            swtch(struct context*, struct context*);
@@ -192,5 +185,9 @@ void            plic_complete(int);
 void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
+
+//added function
+int getprocinfo(int pid);
+
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

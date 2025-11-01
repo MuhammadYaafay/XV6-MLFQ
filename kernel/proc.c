@@ -26,6 +26,52 @@ extern char trampoline[]; // trampoline.S
 // must be acquired before any p->lock.
 struct spinlock wait_lock;  //prevent race condition checking for dead child
 
+
+
+
+// NEW MLFQ HELPER FUNCTIONS
+
+// Get time slice for a given priority level
+// Higher priority = shorter time slice for better responsiveness
+int get_timeslice(int priority) {
+  switch(priority) {
+    case MLFQ_HIGH:   return TIMESLICE_HIGH;    // 4 ticks - shortest time slice
+    case MLFQ_MEDIUM: return TIMESLICE_MEDIUM;  // 8 ticks - medium time slice
+    case MLFQ_LOW:    return TIMESLICE_LOW;     // 16 ticks - longest time slice
+    default:          return TIMESLICE_LOW;     // Default to lowest priority
+  }
+}
+
+// Initialize MLFQ fields for a new process
+// All new processes start at highest priority for best responsiveness
+void init_mlfq_proc(struct proc *p) {
+  p->priority = MLFQ_HIGH;                       // Start at highest priority
+  p->timeslice = get_timeslice(MLFQ_HIGH);      // Set time slice for high priority
+  p->timeslice_used = 0;                        // No time used yet
+  p->runtime_ticks = 0;                         // No CPU time consumed
+  p->scheduled_num = 0;                         // Not scheduled yet
+  p->yield_io = 0;                              // Not yielded for I/O
+}
+
+// Anti-starvation mechanism: boost all processes to highest priority
+// This prevents lower-priority processes from being starved indefinitely
+void boost_all_priorities(void) {
+  struct proc *p;
+  
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state == RUNNABLE || p->state == RUNNING) {
+      p->priority = MLFQ_HIGH;                  // Reset to highest priority
+      p->timeslice = get_timeslice(MLFQ_HIGH);  // Reset time slice
+      p->timeslice_used = 0;                    // Reset usage counter
+    }
+    release(&p->lock);
+  }
+}
+
+
+
+
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
 // guard page.
@@ -149,6 +195,8 @@ found:
   memset(&p->context, 0, sizeof(p->context));  //Context saves kernel registers when switching between processes
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  init_mlfq_proc(p);
 
   return p;
 }
@@ -424,6 +472,11 @@ kwait(uint64 addr)
   }
 }
 
+
+
+
+// Round Robin comment out
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -431,49 +484,127 @@ kwait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+// void
+// scheduler(void)
+// {
+//   struct proc *p;
+//   struct cpu *c = mycpu();
+
+//   c->proc = 0;
+//   for(;;){
+//     // The most recent process to run may have had interrupts
+//     // turned off; enable them to avoid a deadlock if all
+//     // processes are waiting. Then turn them back off
+//     // to avoid a possible race between an interrupt
+//     // and wfi.
+    
+//     intr_on();
+
+//     int found = 0;
+//     for(p = proc; p < &proc[NPROC]; p++) {
+//       acquire(&p->lock);
+//       if(p->state == RUNNABLE) {
+
+//         p->scheduled_num++;     //times a process has been scheduled
+//         if(p->first_scheduled==0){
+//           p->first_scheduled=ticks;
+//         }
+
+//         p->state = RUNNING;
+//         c->proc = p;
+//         swtch(&c->context, &p->context);
+
+//         // Process is done running for now.
+//         // It should have changed its p->state before coming back.
+//         c->proc = 0;
+//         found = 1;
+//       }
+//       release(&p->lock);
+//     }
+//     if(found == 0) {
+//       // nothing to run; stop running on this core until an interrupt.
+//       asm volatile("wfi");
+//     }
+//   }
+// }
+
+
+// MLFQ SCHEDULER IMPLEMENTATION
+// Multi-Level Feedback Queue Scheduler
+// Implements 3 priority levels with different time slices
 void
 scheduler(void)
 {
-  struct proc *p;
-  struct cpu *c = mycpu();
+  struct proc *p;                    // Pointer to current process being considered
+  struct cpu *c = mycpu();           // Get current CPU structure
+  
+  c->proc = 0;                       // Initialize CPU's current process to null
+  for(;;){                           // Infinite scheduling loop
+    // Enable interrupts to avoid deadlock when all processes are waiting
+    intr_on();                       // Turn on interrupts
+    intr_off();                      // Turn off interrupts immediately
 
-  c->proc = 0;
-  for(;;){
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
+    int found = 0;                   // Flag to track if we found a runnable process
     
-    intr_on();
+    // Search for runnable processes starting from highest priority (0) to lowest (2)
+    for(int priority = MLFQ_HIGH; priority <= MLFQ_LOW; priority++) {
+      
+      // Scan all processes in the process table for this priority level
+      for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);           // Acquire process lock for thread safety
+        
+        // Check if process is runnable and at current priority level
+        if(p->state == RUNNABLE && p->priority == priority) {
+          
+          // Found a runnable process at this priority level
+          p->state = RUNNING;        // Change process state to running
+          c->proc = p;               // Assign process to current CPU
+          p->scheduled_num++;        // Increment scheduling counter for statistics
+          
+          // Set first_scheduled time if this is the first time
+          if (p->first_scheduled == 0) {
+              p->first_scheduled = ticks;
+          }
+          
+          p->timeslice_used = 0;     // Reset time slice usage counter
+          p->yield_io = 0;           // Reset I/O yield flag
+          
+          // Context switch to the selected process
+          swtch(&c->context, &p->context);
 
-    int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-
-        p->scheduled_num++;     //times a process has been scheduled
-        if(p->first_scheduled==0){
-          p->first_scheduled=ticks;
+          // Process has returned control to scheduler
+          // Process should have changed its state before coming back
+          c->proc = 0;               // Clear CPU's current process
+          found = 1;                 // Mark that we found and ran a process
+          
+          // Check why process returned: time slice expired or I/O yield
+          if(!p->yield_io && p->timeslice_used >= p->timeslice) {
+            // Time slice expired - demote process to lower priority
+            if(p->priority < MLFQ_LOW) {
+              p->priority++;         // Move to lower priority level (higher number)
+              p->timeslice = get_timeslice(p->priority);  // Update time slice for new priority
+            }
+          }
+          // If process yielded for I/O (yielded_io == 1), keep same priority
+          
+          // Reset time slice usage for next scheduling
+          p->timeslice_used = 0;
         }
-
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+        release(&p->lock);           // Release process lock
       }
-      release(&p->lock);
+      
+      // If we found a process at this priority level, don't check lower priorities
+      if(found) break;               // Exit priority loop, start fresh in main loop
     }
+    
+    // If no runnable processes found at any priority level, wait for interrupt
     if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      asm volatile("wfi");
+      asm volatile("wfi");           // Wait for interrupt instruction
     }
   }
 }
+
+
 
 // Switch to scheduler.  Must hold only p->lock
 // and have changed proc->state. Saves and restores
@@ -502,16 +633,90 @@ sched(void)
   mycpu()->intena = intena;
 }
 
+
+// Round Robin comment out
 // Give up the CPU for one scheduling round.
+// void
+// yield(void)
+// {
+//   struct proc *p = myproc();
+//   acquire(&p->lock);
+//   p->state = RUNNABLE;
+//   sched();
+//   release(&p->lock);
+// }
+
+
+// NEW YIELD FUNCTION FOR MLFQ 
+// Modified yield function to handle I/O yielding in MLFQ
+// User-initiated yield for I/O operations
 void
 yield(void)
 {
+  struct proc *p = myproc();         // Get current process
+  acquire(&p->lock);                 // Acquire process lock
+  
+  p->yield_io = 1;                   // Mark that process yielded for I/O (not time slice expiration)
+  p->state = RUNNABLE;               // Change process state to runnable
+  sched();                           // Switch to scheduler
+  
+  release(&p->lock);                 // Release process lock
+}
+
+// Kernel-initiated yield for time slice expiration
+void
+yield_timeslice(void)
+{
   struct proc *p = myproc();
   acquire(&p->lock);
+  
+  p->yield_io = 0;           // Demote priority (timeslice expired)
   p->state = RUNNABLE;
   sched();
+  
   release(&p->lock);
 }
+
+// NEW MLFQ TIMER TICK HANDLER 
+// Timer interrupt handler - called every clock tick
+// This function should be called from trap.c when a timer interrupt occurs
+
+// Global starvation prevention counter
+static int starvation_counter = 0;
+#define STARVATION_THRESHOLD 1000  // Boost all processes every 1000 ticks
+
+void
+mlfq_tick(void)
+{
+  struct proc *p = myproc();         // Get current running process
+  
+  // Increment global starvation counter
+  starvation_counter++;
+  
+  // Check for starvation prevention - boost all processes periodically
+  if(starvation_counter >= STARVATION_THRESHOLD) {
+    boost_all_priorities();          // Reset all processes to HIGH priority
+    starvation_counter = 0;          // Reset counter
+  }
+  
+  if(p != 0 && p->state == RUNNING) { // Check if there's a running process
+    acquire(&p->lock);               // Acquire process lock for thread safety
+    
+    p->runtime_ticks++;              // Increment total CPU ticks consumed by process
+    p->timeslice_used++;             // Increment time slice usage for current scheduling round
+    
+    // Check if time slice is exhausted for current priority level
+    if(p->timeslice_used >= p->timeslice) {
+      p->yield_io = 0;               // Mark as time slice expiration (not I/O yield)
+      release(&p->lock);             // Release process lock
+      yield_timeslice();                       // Force process to yield CPU
+      return;
+    }
+    
+    release(&p->lock);               // Release process lock
+  }
+}
+
 
 // A fork child's very first scheduling by scheduler()
 // will swtch to forkret.

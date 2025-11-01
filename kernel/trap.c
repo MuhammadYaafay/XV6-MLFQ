@@ -81,8 +81,8 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  // if(which_dev == 2)
+  //   yield();
 
   prepare_return();
 
@@ -152,8 +152,8 @@ kerneltrap()
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
-    yield();
+  // if(which_dev == 2 && myproc() != 0)
+  //   yield();
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
@@ -165,10 +165,10 @@ void
 clockintr()
 {
 
-  struct proc *p=myproc();
-  if(p && p->state == RUNNING){
-    p->runtime_ticks++;
-  }
+  // struct proc *p=myproc();
+  // if(p && p->state == RUNNING){
+  //   p->runtime_ticks++;
+  // }
 
   if(cpuid() == 0){
     acquire(&tickslock);
@@ -176,6 +176,9 @@ clockintr()
     wakeup(&ticks);
     release(&tickslock);
   }
+
+
+  mlfq_tick(); //time slice management
 
   // ask for the next timer interrupt. this also clears
   // the interrupt request. 1000000 is about a tenth

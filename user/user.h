@@ -2,6 +2,15 @@
 
 struct stat;
 
+// Structure for process performance information (MLFQ)
+struct procinfo {
+  int pid;              // Process ID
+  int priority;         // Current priority level
+  int cpu_ticks;        // Total CPU ticks consumed
+  int sched_count;      // Number of times scheduled
+  int timeslice_used;   // Ticks used in current time slice
+};
+
 // system calls
 int fork(void);
 int exit(int) __attribute__((noreturn));

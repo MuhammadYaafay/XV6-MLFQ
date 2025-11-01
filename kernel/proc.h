@@ -80,7 +80,27 @@ struct trapframe {
 };
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
-enum queued { QUEUED, NOTQUEUED };
+
+// MLFQ Priority levels
+#define MLFQ_HIGH    0    // Highest priority level
+#define MLFQ_MEDIUM  1    // Medium priority level  
+#define MLFQ_LOW     2    // Lowest priority level
+#define MLFQ_LEVELS  3    // Total number of priority levels
+
+// Time slices for each priority level (in ticks)
+#define TIMESLICE_HIGH   4   // 4 ticks for high priority processes
+#define TIMESLICE_MEDIUM 8   // 8 ticks for medium priority processes
+#define TIMESLICE_LOW    16  // 16 ticks for low priority processes
+
+// Structure for process performance information
+struct procinfo {
+  int pid;              // Process ID
+  int priority;         // Current priority level
+  int cpu_ticks;        // Total CPU ticks consumed
+  int sched_count;      // Number of times scheduled
+  int timeslice_used;   // Ticks used in current time slice
+};
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -91,12 +111,6 @@ struct proc {
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
-  int staticpriority;          // Static priority of the process
-  uint scheduletick;           // Stores the tick on which the process was last scheduled
-  uint runningticks;           // Stores the number of ticks it was running since last scheduled
-  uint sleepingticks;          // Stores the number of ticks it was sleeping since last scheduled
-  uint totalrtime;             // Total run time of a process
-  int schedulecount;
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
@@ -104,8 +118,6 @@ struct proc {
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
-  int tracemask;               // Stores the trace mask
-  uint createtime;             // Stores the tick on when it was created
   pagetable_t pagetable;       // User page table
   struct trapframe *trapframe; // data page for trampoline.S
   struct context context;      // swtch() here to run process
@@ -114,26 +126,13 @@ struct proc {
   char name[16];               // Process name (debugging)
 
   //for getprocinfo
+  int priority;
+  int timeslice;
+  int timeslice_used;
   uint runtime_ticks;
   uint scheduled_num;
   uint created;
   uint exited;
   uint first_scheduled;
-
-  enum queued queuestate;
-  int queuelevel;
-  int queueruntime;
-  uint queueentertime;
-  uint q[QCOUNT];
-  
+  int yield_io;               //flag 1 if yielded io, 0 if expired
 };
-
-struct PriorityQueue {
-  int front, back;
-  struct proc* queue[QSIZE];
-};
-extern struct PriorityQueue queuetable[QCOUNT];
-void push(struct PriorityQueue* q, struct proc* p);
-struct proc* pop(struct PriorityQueue* q);
-void remove(struct PriorityQueue* q, struct proc* p);
-int empty(struct PriorityQueue q);
