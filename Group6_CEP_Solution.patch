@@ -1,0 +1,862 @@
+diff --git a/Makefile b/Makefile
+index 2ae20e8..948005a 100644
+--- a/Makefile
++++ b/Makefile
+@@ -145,6 +145,8 @@ UPROGS=\
+ 	$U/_dorphan\
+ 	$U/_ps\
+ 	$U/_time\
++	$U/_cpubound\
++	$U/_iobound\
+ 
+ fs.img: mkfs/mkfs README $(UPROGS)
+ 	mkfs/mkfs fs.img README $(UPROGS)
+diff --git a/README b/README
+index 2f6c48d..fb492ee 100644
+--- a/README
++++ b/README
+@@ -1,48 +1 @@
+-xv6 is a re-implementation of Dennis Ritchie's and Ken Thompson's Unix
+-Version 6 (v6).  xv6 loosely follows the structure and style of v6,
+-but is implemented for a modern RISC-V multiprocessor using ANSI C.
+-
+-ACKNOWLEDGMENTS
+-
+-xv6 is inspired by John Lions's Commentary on UNIX 6th Edition (Peer
+-to Peer Communications; ISBN: 1-57398-013-7; 1st edition (June 14,
+-2000)).  See also https://pdos.csail.mit.edu/6.1810/, which provides
+-pointers to on-line resources for v6.
+-
+-The following people have made contributions: Russ Cox (context switching,
+-locking), Cliff Frey (MP), Xiao Yu (MP), Nickolai Zeldovich, and Austin
+-Clements.
+-
+-We are also grateful for the bug reports and patches contributed by
+-Abhinavpatel00, Takahiro Aoyagi, Marcelo Arroyo, Hirbod Behnam, Silas
+-Boyd-Wickizer, Anton Burtsev, carlclone, Ian Chen, clivezeng, Dan
+-Cross, Cody Cutler, Mike CAT, Tej Chajed, Asami Doi,Wenyang Duan,
+-echtwerner, eyalz800, Nelson Elhage, Saar Ettinger, Alice Ferrazzi,
+-Nathaniel Filardo, flespark, Peter Froehlich, Yakir Goaron, Shivam
+-Handa, Matt Harvey, Bryan Henry, jaichenhengjie, Jim Huang, Matúš
+-Jókay, John Jolly, Alexander Kapshuk, Anders Kaseorg, kehao95,
+-Wolfgang Keller, Jungwoo Kim, Jonathan Kimmitt, Eddie Kohler, Vadim
+-Kolontsov, Austin Liew, l0stman, Pavan Maddamsetti, Imbar Marinescu,
+-Yandong Mao, Matan Shabtay, Hitoshi Mitake, Carmi Merimovich,
+-mes900903, Mark Morrissey, mtasm, Joel Nider, Hayato Ohhashi,
+-OptimisticSide, papparapa, phosphagos, Harry Porter, Greg Price, Zheng
+-qhuo, Quancheng, RayAndrew, Jude Rich, segfault, Ayan Shafqat, Eldar
+-Sehayek, Yongming Shen, Fumiya Shigemitsu, snoire, Taojie, Cam Tenny,
+-tyfkda, Warren Toomey, Stephen Tu, Alissa Tung, Rafael Ubal, unicornx,
+-Amane Uehara, Pablo Ventura, Luc Videau, Xi Wang, WaheedHafez, Keiichi
+-Watanabe, Lucas Wolf, Nicolas Wolovick, wxdao, Grant Wu, x653, Andy
+-Zhang, Jindong Zhang, Icenowy Zheng, ZhUyU1997, and Zou Chang Wei.
+-
+-ERROR REPORTS
+-
+-Please send errors and suggestions to Frans Kaashoek and Robert Morris
+-(kaashoek,rtm@mit.edu).  The main purpose of xv6 is as a teaching
+-operating system for MIT's 6.1810, so we are more interested in
+-simplifications and clarifications than new features.
+-
+-BUILDING AND RUNNING XV6
+-
+-You will need a RISC-V "newlib" tool chain from
+-https://github.com/riscv/riscv-gnu-toolchain, and qemu compiled for
+-riscv64-softmmu.  Once they are installed, and in your shell
+-search path, you can run "make qemu".
++Project which involved modifying the xv6 Operating System designed by MIT, implementing new system calls, and scheduling algorithm multilevel feedback queue
+diff --git a/kernel/defs.h b/kernel/defs.h
+index 2189fdc..158d71f 100644
+--- a/kernel/defs.h
++++ b/kernel/defs.h
+@@ -102,6 +102,10 @@ void            yield(void);
+ int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
+ int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
+ void            procdump(void);
++//added
++void            mlfq_tick(void);
++void            yield_timeslice(void);
++int             getprocinfo(int pid);
+ 
+ // swtch.S
+ void            swtch(struct context*, struct context*);
+@@ -181,5 +185,9 @@ void            plic_complete(int);
+ void            virtio_disk_init(void);
+ void            virtio_disk_rw(struct buf *, int);
+ void            virtio_disk_intr(void);
++
++//added function
++int getprocinfo(int pid);
++
+ // number of elements in fixed-size array
+ #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+diff --git a/kernel/param.h b/kernel/param.h
+index cd2a41c..c705879 100644
+--- a/kernel/param.h
++++ b/kernel/param.h
+@@ -11,5 +11,4 @@
+ #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
+ #define FSSIZE       2000  // size of file system in blocks
+ #define MAXPATH      128   // maximum file path name
+-#define USERSTACK    1     // user stack pages
+-
++#define USERSTACK    1     // user stack pages
+\ No newline at end of file
+diff --git a/kernel/proc.c b/kernel/proc.c
+index b2446c2..126acd8 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -11,9 +11,9 @@ struct cpu cpus[NCPU];
+ struct proc proc[NPROC];
+ 
+ struct proc *initproc;
+-
++extern uint ticks;
+ int nextpid = 1;
+-struct spinlock pid_lock;
++struct spinlock pid_lock; // to prevent same PID for two processes
+ 
+ extern void forkret(void);
+ static void freeproc(struct proc *p);
+@@ -24,22 +24,66 @@ extern char trampoline[]; // trampoline.S
+ // parents are not lost. helps obey the
+ // memory model when using p->parent.
+ // must be acquired before any p->lock.
+-struct spinlock wait_lock;
++struct spinlock wait_lock;  //prevent race condition checking for dead child
++
++
++
++//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
++// NEW MLFQ HELPER FUNCTIONS
++// Get time slice for a given priority level
++// Higher priority = shorter time slice for better responsiveness
++int get_timeslice(int priority) {
++  switch(priority) {
++    case MLFQ_HIGH:   return TIMESLICE_HIGH;    // 4 ticks - shortest time slice
++    case MLFQ_MEDIUM: return TIMESLICE_MEDIUM;  // 8 ticks - medium time slice
++    case MLFQ_LOW:    return TIMESLICE_LOW;     // 16 ticks - longest time slice
++    default:          return TIMESLICE_LOW;     // Default to lowest priority
++  }
++}
++
++// Initialize MLFQ fields for a new process
++// All new processes start at highest priority for best responsiveness
++void init_mlfq_proc(struct proc *p) {
++  p->priority = MLFQ_HIGH;                       // Start at highest priority
++  p->timeslice = get_timeslice(MLFQ_HIGH);      // Set time slice for high priority
++  p->timeslice_used = 0;                        // No time used yet
++  p->runtime_ticks = 0;                         // No CPU time consumed
++  p->scheduled_num = 0;                         // Not scheduled yet
++  p->yield_io = 0;                              // Not yielded for I/O
++}
++
++// Anti-starvation mechanism: boost all processes to highest priority
++// This prevents lower-priority processes from being starved indefinitely
++void boost_all_priorities(void) {
++  struct proc *p;
++  
++  for(p = proc; p < &proc[NPROC]; p++) {
++    acquire(&p->lock);
++    if(p->state == RUNNABLE || p->state == RUNNING) {
++      p->priority = MLFQ_HIGH;                  // Reset to highest priority
++      p->timeslice = get_timeslice(MLFQ_HIGH);  // Reset time slice
++      p->timeslice_used = 0;                    // Reset usage counter
++    }
++    release(&p->lock);
++  }
++}
++/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
++
+ 
+ // Allocate a page for each process's kernel stack.
+ // Map it high in memory, followed by an invalid
+ // guard page.
+ void
+-proc_mapstacks(pagetable_t kpgtbl)
++proc_mapstacks(pagetable_t kpgtbl)  //kernel stack for all processes
+ {
+   struct proc *p;
+   
+   for(p = proc; p < &proc[NPROC]; p++) {
+-    char *pa = kalloc();
++    char *pa = kalloc(); //one page for process's kstack
+     if(pa == 0)
+       panic("kalloc");
+-    uint64 va = KSTACK((int) (p - proc));
+-    kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
++    uint64 va = KSTACK((int) (p - proc)); // virtual address for this process's kstack
++    kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W); //map kstack in kernel page table
+   }
+ }
+ 
+@@ -62,7 +106,7 @@ procinit(void)
+ // to prevent race with process being moved
+ // to a different CPU.
+ int
+-cpuid()
++cpuid() //which CPU core is executing this code
+ {
+   int id = r_tp();
+   return id;
+@@ -82,11 +126,11 @@ mycpu(void)
+ struct proc*
+ myproc(void)
+ {
+-  push_off();
++  push_off(); //disable interupt
+   struct cpu *c = mycpu();
+-  struct proc *p = c->proc;
+-  pop_off();
+-  return p;
++  struct proc *p = c->proc; //Get the process that's currently running on this CPU.The CPU struct has a field proc that points to the active process
++  pop_off(); //enable interupt
++  return p; 
+ }
+ 
+ int
+@@ -124,9 +168,13 @@ allocproc(void)
+ found:
+   p->pid = allocpid();
+   p->state = USED;
+-
++  //for getprocinfo
++  p->first_scheduled=0;
++  p->created=ticks;
++  p->runtime_ticks = 0;
++  p->scheduled_num=0;
+   // Allocate a trapframe page.
+-  if((p->trapframe = (struct trapframe *)kalloc()) == 0){
++  if((p->trapframe = (struct trapframe *)kalloc()) == 0){  //The trapframe stores user registers when the process traps into the kernel (system call, interrupt, exception)
+     freeproc(p);
+     release(&p->lock);
+     return 0;
+@@ -142,10 +190,12 @@ found:
+ 
+   // Set up new context to start executing at forkret,
+   // which returns to user space.
+-  memset(&p->context, 0, sizeof(p->context));
++  memset(&p->context, 0, sizeof(p->context));  //Context saves kernel registers when switching between processes
+   p->context.ra = (uint64)forkret;
+   p->context.sp = p->kstack + PGSIZE;
+ 
++  init_mlfq_proc(p);
++
+   return p;
+ }
+ 
+@@ -202,7 +252,8 @@ proc_pagetable(struct proc *p)
+     return 0;
+   }
+ 
+-  return pagetable;
++  return pagetable; //A trampoline page for switching modes.A trapframe page for saving CPU registers.
++
+ }
+ 
+ // Free a process's page table, and free the
+@@ -358,6 +409,16 @@ kexit(int status)
+   p->xstate = status;
+   p->state = ZOMBIE;
+ 
++  p->exited = ticks;
++
++  if (strncmp(p->name, "iobound", 7) == 0 || strncmp(p->name, "cpubound", 8) == 0) {
++    printf("| Exited at          |  %d\n", p->exited);
++    printf("| Turnaround Time    | %d\n", p->exited - p->created);
++    printf("=============================================\n\n");
++  }
++
++
++
+   release(&wait_lock);
+ 
+   // Jump into the scheduler, never to return.
+@@ -414,6 +475,11 @@ kwait(uint64 addr)
+   }
+ }
+ 
++
++
++
++// Round Robin comment out
++
+ // Per-CPU process scheduler.
+ // Each CPU calls scheduler() after setting itself up.
+ // Scheduler never returns.  It loops, doing:
+@@ -421,47 +487,132 @@ kwait(uint64 addr)
+ //  - swtch to start running that process.
+ //  - eventually that process transfers control
+ //    via swtch back to the scheduler.
++// void
++// scheduler(void)
++// {
++//   struct proc *p;
++//   struct cpu *c = mycpu();
++
++//   c->proc = 0;
++//   for(;;){
++//     // The most recent process to run may have had interrupts
++//     // turned off; enable them to avoid a deadlock if all
++//     // processes are waiting. Then turn them back off
++//     // to avoid a possible race between an interrupt
++//     // and wfi.
++    
++//     intr_on();
++
++//     int found = 0;
++//     for(p = proc; p < &proc[NPROC]; p++) {
++//       acquire(&p->lock);
++//       if(p->state == RUNNABLE) {
++
++//         p->scheduled_num++;     //times a process has been scheduled
++//         if(p->first_scheduled==0){
++//           p->first_scheduled=ticks;
++//         }
++
++//         p->state = RUNNING;
++//         c->proc = p;
++//         swtch(&c->context, &p->context);
++
++//         // Process is done running for now.
++//         // It should have changed its p->state before coming back.
++//         c->proc = 0;
++//         found = 1;
++//       }
++//       release(&p->lock);
++//     }
++//     if(found == 0) {
++//       // nothing to run; stop running on this core until an interrupt.
++//       asm volatile("wfi");
++//     }
++//   }
++// }
++
++////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
++
++// MLFQ SCHEDULER IMPLEMENTATION
++// Implements 3 priority levels with different time slices
+ void
+ scheduler(void)
+ {
+-  struct proc *p;
+-  struct cpu *c = mycpu();
++  struct proc *p;                    // Pointer to current process being considered
++  struct cpu *c = mycpu();           // Get current CPU structure
++  
++  c->proc = 0;                       // Initialize CPU's current process to null
++  for(;;){                           // Infinite scheduling loop
++    // Enable interrupts to avoid deadlock when all processes are waiting
++    intr_on();                       // Turn on interrupts
++    intr_off();                      // Turn off interrupts immediately
+ 
+-  c->proc = 0;
+-  for(;;){
+-    // The most recent process to run may have had interrupts
+-    // turned off; enable them to avoid a deadlock if all
+-    // processes are waiting. Then turn them back off
+-    // to avoid a possible race between an interrupt
+-    // and wfi.
+-    intr_on();
+-    intr_off();
+-
+-    int found = 0;
+-    for(p = proc; p < &proc[NPROC]; p++) {
+-      acquire(&p->lock);
+-      if(p->state == RUNNABLE) {
+-        // Switch to chosen process.  It is the process's job
+-        // to release its lock and then reacquire it
+-        // before jumping back to us.
+-        p->state = RUNNING;
+-        c->proc = p;
+-        swtch(&c->context, &p->context);
+-
+-        // Process is done running for now.
+-        // It should have changed its p->state before coming back.
+-        c->proc = 0;
+-        found = 1;
++    int found = 0;                   // Flag to track if we found a runnable process
++    
++    // Search for runnable processes starting from highest priority (0) to lowest (2)
++    for(int priority = MLFQ_HIGH; priority <= MLFQ_LOW; priority++) {
++      
++      // Scan all processes in the process table for this priority level
++      for(p = proc; p < &proc[NPROC]; p++) {
++        acquire(&p->lock);           // Acquire process lock for thread safety
++        
++        // Check if process is runnable and at current priority level
++        if(p->state == RUNNABLE && p->priority == priority) {
++          
++          // Found a runnable process at this priority level
++          p->state = RUNNING;        // Change process state to running
++          c->proc = p;               // Assign process to current CPU
++          p->scheduled_num++;        // Increment scheduling counter for statistics
++          
++          // Set first_scheduled time if this is the first time
++          if (p->first_scheduled == 0) {
++              p->first_scheduled = ticks;
++          }
++          
++          p->timeslice_used = 0;     // Reset time slice usage counter
++          p->yield_io = 0;           // Reset I/O yield flag
++          
++          // if (strncmp(p->name, "iobound", 7) == 0 || strncmp(p->name, "cpubound", 8) == 0){
++          //   printf("Process ID: %d switching at: %d time\n", p->pid, ticks);
++
++          // }
++          // Context switch to the selected process
++          swtch(&c->context, &p->context);
++
++          // Process has returned control to scheduler
++          // Process should have changed its state before coming back
++          c->proc = 0;               // Clear CPU's current process
++          found = 1;                 // Mark that we found and ran a process
++          
++          // Check why process returned: time slice expired or I/O yield
++          if(!p->yield_io && p->timeslice_used >= p->timeslice) {
++            // Time slice expired - demote process to lower priority
++            if(p->priority < MLFQ_LOW) {
++              p->priority++;         // Move to lower priority level (higher number)
++              p->timeslice = get_timeslice(p->priority);  // Update time slice for new priority
++            }
++          }
++          // If process yielded for I/O (yielded_io == 1), keep same priority
++          
++          // Reset time slice usage for next scheduling
++          p->timeslice_used = 0;
++        }
++        release(&p->lock);           // Release process lock
+       }
+-      release(&p->lock);
++      
++      // If we found a process at this priority level, don't check lower priorities
++      if(found) break;               // Exit priority loop, start fresh in main loop
+     }
++    
++    // If no runnable processes found at any priority level, wait for interrupt
+     if(found == 0) {
+-      // nothing to run; stop running on this core until an interrupt.
+-      asm volatile("wfi");
++      asm volatile("wfi");           // Wait for interrupt instruction
+     }
+   }
+ }
+ 
++
++
+ // Switch to scheduler.  Must hold only p->lock
+ // and have changed proc->state. Saves and restores
+ // intena because intena is a property of this
+@@ -489,17 +640,92 @@ sched(void)
+   mycpu()->intena = intena;
+ }
+ 
+-// Give up the CPU for one scheduling round.
++
++// Round Robin comment out
++// Give up the CPU for one scheduling round
++// void
++// yield(void)
++// {
++//   struct proc *p = myproc();
++//   acquire(&p->lock);
++//   p->state = RUNNABLE;
++//   sched();
++//   release(&p->lock);
++// }
++
++
++// NEW YIELD FUNCTION FOR MLFQ 
++// Modified yield function to handle I/O yielding in MLFQ
++// User-initiated yield for I/O operations
+ void
+ yield(void)
++{
++  struct proc *p = myproc();         // Get current process
++  acquire(&p->lock);                 // Acquire process lock
++  
++  p->yield_io = 1;                   // Mark that process yielded for I/O (not time slice expiration)
++  p->state = RUNNABLE;               // Change process state to runnable
++  sched();                           // Switch to scheduler
++  
++  release(&p->lock);                 // Release process lock
++}
++
++// Kernel-initiated yield for time slice expiration
++void
++yield_timeslice(void)
+ {
+   struct proc *p = myproc();
+   acquire(&p->lock);
++  
++  p->yield_io = 0;           // Demote priority (timeslice expired)
+   p->state = RUNNABLE;
+   sched();
++  
+   release(&p->lock);
+ }
+ 
++// NEW MLFQ TIMER TICK HANDLER 
++// Timer interrupt handler - called every clock tick
++// This function should be called from trap.c when a timer interrupt occurs
++
++// Global starvation prevention counter
++static int starvation_counter = 0;
++#define STARVATION_THRESHOLD 1000  // Boost all processes every 1000 ticks
++
++void
++mlfq_tick(void)
++{
++  struct proc *p = myproc();         // Get current running process
++  
++  // Increment global starvation counter
++  starvation_counter++;
++  
++  // Check for starvation prevention - boost all processes periodically
++  if(starvation_counter >= STARVATION_THRESHOLD) {
++    boost_all_priorities();          // Reset all processes to HIGH priority
++    starvation_counter = 0;          // Reset counter
++  }
++  
++  if(p != 0 && p->state == RUNNING) { // Check if there's a running process
++    acquire(&p->lock);               // Acquire process lock for thread safety
++    
++    p->runtime_ticks++;              // Increment total CPU ticks consumed by process
++    p->timeslice_used++;             // Increment time slice usage for current scheduling round
++    
++    // Check if time slice is exhausted for current priority level
++    if(p->timeslice_used >= p->timeslice) {
++      p->yield_io = 0;               // Mark as time slice expiration (not I/O yield)
++      release(&p->lock);             // Release process lock
++      yield_timeslice();                       // Force process to yield CPU
++      return;
++    }
++    
++    release(&p->lock);               // Release process lock
++  }
++}
++////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
++
++
+ // A fork child's very first scheduling by scheduler()
+ // will swtch to forkret.
+ void
+diff --git a/kernel/proc.h b/kernel/proc.h
+index d021857..990c925 100644
+--- a/kernel/proc.h
++++ b/kernel/proc.h
+@@ -81,6 +81,19 @@ struct trapframe {
+ 
+ enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+ 
++//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
++// MLFQ Priority levels
++#define MLFQ_HIGH    0    // Highest priority level
++#define MLFQ_MEDIUM  1    // Medium priority level  
++#define MLFQ_LOW     2    // Lowest priority level
++#define MLFQ_LEVELS  3    // Total number of priority levels
++
++// Time slices for each priority level (in ticks)
++#define TIMESLICE_HIGH   4   // 4 ticks for high priority processes
++#define TIMESLICE_MEDIUM 8   // 8 ticks for medium priority processes
++#define TIMESLICE_LOW    16  // 16 ticks for low priority processes
++//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
++
+ // Per-process state
+ struct proc {
+   struct spinlock lock;
+@@ -104,4 +117,20 @@ struct proc {
+   struct file *ofile[NOFILE];  // Open files
+   struct inode *cwd;           // Current directory
+   char name[16];               // Process name (debugging)
++
++//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
++  //for getprocinfo
++  int priority;
++  int timeslice;
++  int timeslice_used;
++  uint runtime_ticks;
++  uint scheduled_num;
++  uint created;
++  uint exited;
++  uint first_scheduled;
++  int yield_io;               //flag 1 if yielded io, 0 if expired
++//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
++  
+ };
++
++
+diff --git a/kernel/syscall.c b/kernel/syscall.c
+index 794ea86..7fb96a7 100644
+--- a/kernel/syscall.c
++++ b/kernel/syscall.c
+@@ -102,6 +102,7 @@ extern uint64 sys_link(void);
+ extern uint64 sys_mkdir(void);
+ extern uint64 sys_close(void);
+ extern uint64 sys_ps(void);
++extern uint64 sys_getprocinfo(void);
+ 
+ // An array mapping syscall numbers from syscall.h
+ // to the function that handles the system call.
+@@ -128,6 +129,7 @@ static uint64 (*syscalls[])(void) = {
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
+ [SYS_ps]      sys_ps,
++[SYS_getprocinfo] sys_getprocinfo
+ };
+ 
+ void
+diff --git a/kernel/syscall.h b/kernel/syscall.h
+index 50217db..5ba2bed 100644
+--- a/kernel/syscall.h
++++ b/kernel/syscall.h
+@@ -21,3 +21,5 @@
+ #define SYS_mkdir  20
+ #define SYS_close  21
+ #define SYS_ps     22
++#define SYS_getprocinfo 23
++
+diff --git a/kernel/sysproc.c b/kernel/sysproc.c
+index d23ee1c..a64fcaa 100644
+--- a/kernel/sysproc.c
++++ b/kernel/sysproc.c
+@@ -7,6 +7,7 @@
+ #include "proc.h"
+ #include "vm.h"
+ 
++
+ uint64
+ sys_exit(void)
+ {
+@@ -112,3 +113,32 @@ sys_ps(void)
+ {
+   return ps();
+ }
++
++//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
++uint64
++sys_getprocinfo(void){
++
++  int pid;
++  argint(0, &pid);
++  extern struct proc proc[NPROC];
++
++  struct proc *p;
++  for (p = proc; p < &proc[NPROC]; p++){
++    if(p->pid ==pid){      
++      printf("\n=============================================\n");
++      printf("| PID                | %d\n", pid);
++      printf("| Process Name       | %s\n", p->name);
++      printf("---------------------------------------------\n");
++      printf("| Total Runtime      | %d ticks\n", p->runtime_ticks);
++      printf("| Times Scheduled    | %d times\n", p->scheduled_num);
++      printf("| Created At         | %d\n", p->created);
++      printf("| First Scheduled At | %d\n", p->first_scheduled);
++      printf("| Response Time      | %d\n", p->first_scheduled - p->created);
++
++      //is se agay kexit() se ayega
++      return 0;
++    }
++  }
++  return -1;
++}
++
+diff --git a/kernel/trap.c b/kernel/trap.c
+index a41cd69..ef47f8c 100644
+--- a/kernel/trap.c
++++ b/kernel/trap.c
+@@ -81,8 +81,8 @@ usertrap(void)
+     kexit(-1);
+ 
+   // give up the CPU if this is a timer interrupt.
+-  if(which_dev == 2)
+-    yield();
++  // if(which_dev == 2)
++  //   yield();
+ 
+   prepare_return();
+ 
+@@ -152,8 +152,8 @@ kerneltrap()
+   }
+ 
+   // give up the CPU if this is a timer interrupt.
+-  if(which_dev == 2 && myproc() != 0)
+-    yield();
++  // if(which_dev == 2 && myproc() != 0)
++  //   yield();
+ 
+   // the yield() may have caused some traps to occur,
+   // so restore trap registers for use by kernelvec.S's sepc instruction.
+@@ -164,6 +164,12 @@ kerneltrap()
+ void
+ clockintr()
+ {
++
++  // struct proc *p=myproc();
++  // if(p && p->state == RUNNING){
++  //   p->runtime_ticks++;
++  // }
++
+   if(cpuid() == 0){
+     acquire(&tickslock);
+     ticks++;
+@@ -171,6 +177,9 @@ clockintr()
+     release(&tickslock);
+   }
+ 
++//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
++  mlfq_tick(); //time slice management
++
+   // ask for the next timer interrupt. this also clears
+   // the interrupt request. 1000000 is about a tenth
+   // of a second.
+diff --git a/user/cpubound.c b/user/cpubound.c
+new file mode 100644
+index 0000000..cea45fc
+--- /dev/null
++++ b/user/cpubound.c
+@@ -0,0 +1,21 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++
++
++ int fibonacci(int n)
++  {
++   if (n <= 1) return n;
++   return fibonacci(n - 1) + fibonacci(n - 2);
++  }
++
++int main(){ 
++	int N = 40; // larger value = heavier CPU load int
++
++	int pid=getpid();	//get the process id
++
++	int result = fibonacci(N); 
++	printf("Final Fibonacci(%d) = %d\n", N, result);
++	getprocinfo(pid); 	//new syscall
++	exit(0); 
++}
+\ No newline at end of file
+diff --git a/user/iobound.c b/user/iobound.c
+new file mode 100644
+index 0000000..34d3acf
+--- /dev/null
++++ b/user/iobound.c
+@@ -0,0 +1,74 @@
++#include "kernel/types.h"
++#include "kernel/stat.h" 
++#include "user/user.h" 
++
++int main() { 
++
++	int pid= getpid();
++	int fd; 
++
++	char fname[32], lname[32], age[8], color[32], city[32], country[32];
++
++	fd = open("userdata.txt", 513); // open for writing 
++	if(fd < 0) exit(1); // create if it doesn't exist
++	  
++	printf("Iobound started\n");
++	// for (int i = 0; i < 10; ++i)
++	// {
++	// 	printf("Enter your name: ");
++	// 	gets(name, sizeof(name));
++		
++	// 	for (volatile int j = 0; j < 200000000; j++);			//so it stays long enough for one tick
++
++	// 	write(fd, name, strlen(name));
++	// 	write(fd, "\n", 1);
++	// }
++	
++	printf("Enter your First Name: ");
++    gets(fname, sizeof(fname));
++    for (volatile int j = 0; j < 200000000; j++) {};
++	write(fd, "First Name: ", 12);
++    write(fd, fname, strlen(fname));
++    write(fd, "\n", 1);
++
++	printf("Enter your Last Name: ");
++	gets(lname, sizeof(lname));
++	for (volatile int j = 0; j < 200000000; j++) {};
++	write(fd, "Last Name: ", 11);
++	write(fd, lname, strlen(lname));
++	write(fd, "\n", 1);
++
++	printf("Enter your Age: ");
++	gets(age, sizeof(age));
++	for (volatile int j = 0; j < 200000000; j++) {};
++	write(fd, "Age: ", 5);
++	write(fd, age, strlen(age));
++	write(fd, "\n", 1);
++
++	printf("Enter your Favorite Color: ");
++	gets(color, sizeof(color));
++	for (volatile int j = 0; j < 200000000; j++) {};
++	write(fd, "Favorite Color: ", 16);
++	write(fd, color, strlen(color));
++	write(fd, "\n", 1);
++
++	printf("Enter your City: ");
++	gets(city, sizeof(city));
++	for (volatile int j = 0; j < 200000000; j++) {};
++	write(fd, "City: ", 6);
++	write(fd, city, strlen(city));
++	write(fd, "\n", 1);
++
++	printf("Enter your Country: ");
++	gets(country, sizeof(country));
++	for (volatile int j = 0; j < 200000000; j++) {};
++	write(fd, "Country: ", 9);
++	write(fd, country, strlen(country));
++	write(fd, "\n", 1);
++
++	close(fd);
++
++	getprocinfo(pid); 
++
++	exit(0);
++}
+diff --git a/user/stressfs.c b/user/stressfs.c
+index 247a7a5..c2233bc 100644
+--- a/user/stressfs.c
++++ b/user/stressfs.c
+@@ -17,6 +17,7 @@ int
+ main(int argc, char *argv[])
+ {
+   int fd, i;
++  int pid= getpid();
+   char path[] = "stressfs0";
+   char data[512];
+ 
+@@ -45,5 +46,6 @@ main(int argc, char *argv[])
+ 
+   wait(0);
+ 
++  getprocinfo(pid);
+   exit(0);
+ }
+diff --git a/user/user.h b/user/user.h
+index 1ad144a..65029ea 100644
+--- a/user/user.h
++++ b/user/user.h
+@@ -25,6 +25,9 @@ char* sys_sbrk(int,int);
+ int pause(int);
+ int uptime(void);
+ int ps(void);
++//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
++int getprocinfo(int pid);
++
+ 
+ // ulib.c
+ int stat(const char*, struct stat*);
+diff --git a/user/usys.pl b/user/usys.pl
+index 65e729b..01e9f82 100755
+--- a/user/usys.pl
++++ b/user/usys.pl
+@@ -43,3 +43,4 @@ entry("sbrk");
+ entry("pause");
+ entry("uptime");
+ entry("ps");
++entry("getprocinfo");
