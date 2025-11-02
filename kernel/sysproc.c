@@ -114,7 +114,7 @@ sys_ps(void)
   return ps();
 }
 
-//GETPROCINT() HERE !!!!!
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 uint64
 sys_getprocinfo(void){
 
@@ -125,15 +125,17 @@ sys_getprocinfo(void){
   struct proc *p;
   for (p = proc; p < &proc[NPROC]; p++){
     if(p->pid ==pid){      
-      printf("PID: %d\n", pid);
-      printf("Total runtime: %d ticks\n", p->runtime_ticks);
-      printf("No of times scheduled: %d times\n", p->scheduled_num);
-      printf("Process created at: %d\n", p->created);
-      printf("Process first scheduled at:%d\n", p->first_scheduled);
-      //printf("Process exited at: %d\n", p->exited);
-      //printf("Turnaround time: %d\n", p->exited - p->created);
-      printf("Reponse time: %d\n", p->first_scheduled-p->created);
+      printf("\n=============================================\n");
+      printf("| PID                | %d\n", pid);
+      printf("| Process Name       | %s\n", p->name);
+      printf("---------------------------------------------\n");
+      printf("| Total Runtime      | %d ticks\n", p->runtime_ticks);
+      printf("| Times Scheduled    | %d times\n", p->scheduled_num);
+      printf("| Created At         | %d\n", p->created);
+      printf("| First Scheduled At | %d\n", p->first_scheduled);
+      printf("| Response Time      | %d\n", p->first_scheduled - p->created);
 
+      //is se agay kexit() se ayega
       return 0;
     }
   }

@@ -10,7 +10,7 @@
   }
 
 int main(){ 
-	int N = 40; // larger value = heavier CPU load int
+	int N = 50; // larger value = heavier CPU load int
 
 	int pid=getpid();	//get the process id
 

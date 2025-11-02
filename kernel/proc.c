@@ -28,9 +28,8 @@ struct spinlock wait_lock;  //prevent race condition checking for dead child
 
 
 
-
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // NEW MLFQ HELPER FUNCTIONS
-
 // Get time slice for a given priority level
 // Higher priority = shorter time slice for better responsiveness
 int get_timeslice(int priority) {
@@ -68,8 +67,7 @@ void boost_all_priorities(void) {
     release(&p->lock);
   }
 }
-
-
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
 // Allocate a page for each process's kernel stack.
@@ -411,10 +409,17 @@ kexit(int status)
   p->xstate = status;
   p->state = ZOMBIE;
 
-//
-  p->exited =ticks;
-  printf("Process exited at: %d\n", p->exited);
-  printf("Turnaround time: %d\n", p->exited - p->created);
+  p->exited = ticks;
+
+  int is_name_sh = (p->name[0] == 's' && p->name[1] == 'h' && p->name[2] == '\0'); //cuz it kept showing the exit of shell when it forked to run in bg
+
+  if (!is_name_sh) {
+    printf("| Exited at          |  %d\n", p->exited);
+    printf("| Turnaround Time    | %d\n", p->exited - p->created);
+    printf("=============================================\n\n");
+  }
+
+
 
   release(&wait_lock);
 
@@ -528,9 +533,9 @@ kwait(uint64 addr)
 //   }
 // }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // MLFQ SCHEDULER IMPLEMENTATION
-// Multi-Level Feedback Queue Scheduler
 // Implements 3 priority levels with different time slices
 void
 scheduler(void)
@@ -635,7 +640,7 @@ sched(void)
 
 
 // Round Robin comment out
-// Give up the CPU for one scheduling round.
+// Give up the CPU for one scheduling round
 // void
 // yield(void)
 // {
@@ -716,6 +721,7 @@ mlfq_tick(void)
     release(&p->lock);               // Release process lock
   }
 }
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
 // A fork child's very first scheduling by scheduler()

@@ -17,6 +17,7 @@ int
 main(int argc, char *argv[])
 {
   int fd, i;
+  int pid= getpid();
   char path[] = "stressfs0";
   char data[512];
 
@@ -45,5 +46,6 @@ main(int argc, char *argv[])
 
   wait(0);
 
+  getprocinfo(pid);
   exit(0);
 }

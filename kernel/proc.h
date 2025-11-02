@@ -81,6 +81,7 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // MLFQ Priority levels
 #define MLFQ_HIGH    0    // Highest priority level
 #define MLFQ_MEDIUM  1    // Medium priority level  
@@ -91,15 +92,7 @@ enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 #define TIMESLICE_HIGH   4   // 4 ticks for high priority processes
 #define TIMESLICE_MEDIUM 8   // 8 ticks for medium priority processes
 #define TIMESLICE_LOW    16  // 16 ticks for low priority processes
-
-// Structure for process performance information
-struct procinfo {
-  int pid;              // Process ID
-  int priority;         // Current priority level
-  int cpu_ticks;        // Total CPU ticks consumed
-  int sched_count;      // Number of times scheduled
-  int timeslice_used;   // Ticks used in current time slice
-};
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Per-process state
 struct proc {
@@ -125,6 +118,7 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   //for getprocinfo
   int priority;
   int timeslice;
@@ -135,4 +129,6 @@ struct proc {
   uint exited;
   uint first_scheduled;
   int yield_io;               //flag 1 if yielded io, 0 if expired
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  
 };
