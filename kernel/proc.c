@@ -411,9 +411,7 @@ kexit(int status)
 
   p->exited = ticks;
 
-  int is_name_sh = (p->name[0] == 's' && p->name[1] == 'h' && p->name[2] == '\0'); //cuz it kept showing the exit of shell when it forked to run in bg
-
-  if (!is_name_sh) {
+  if (strncmp(p->name, "iobound", 7) == 0 || strncmp(p->name, "cpubound", 8) == 0) {
     printf("| Exited at          |  %d\n", p->exited);
     printf("| Turnaround Time    | %d\n", p->exited - p->created);
     printf("=============================================\n\n");
@@ -574,6 +572,10 @@ scheduler(void)
           p->timeslice_used = 0;     // Reset time slice usage counter
           p->yield_io = 0;           // Reset I/O yield flag
           
+          // if (strncmp(p->name, "iobound", 7) == 0 || strncmp(p->name, "cpubound", 8) == 0){
+          //   printf("Process ID: %d switching at: %d time\n", p->pid, ticks);
+
+          // }
           // Context switch to the selected process
           swtch(&c->context, &p->context);
 
